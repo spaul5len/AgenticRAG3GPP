@@ -36,6 +36,28 @@ DISCUSSION_QUERY_TERMS = {
     "agenda",
     "company",
 }
+ACRONYM_EXPANSIONS = {
+    "AUSF": [
+        "Nausf_UEAuthentication",
+        "Authentication Server Function",
+        "SEAF",
+        "authentication vector",
+        "HXRES*",
+        "KSEAF",
+    ],
+    "UDM": [
+        "Unified Data Management",
+        "Nudm_UEAuthentication",
+        "authentication subscription data",
+    ],
+    "SBA": [
+        "Service-Based Architecture",
+        "NF Service Consumer",
+        "NF Service Producer",
+        "NRF",
+        "access token",
+    ],
+}
 
 
 def hybrid_search(
@@ -54,6 +76,8 @@ def hybrid_search(
     if not query.strip() or not (search_specs or search_meetings):
         return []
 
+    expanded_query = expand_3gpp_query(query)
+    exact_terms = exact_3gpp_terms_for_query(query)
     results: list[dict[str, Any]] = []
     query_intent = {
         "official_requirement": _is_official_requirement_query(query),
@@ -63,21 +87,25 @@ def hybrid_search(
     if search_specs:
         results.extend(
             _tag_results(
-                search_collection(config.SPEC_COLLECTION, query, k=k_vector),
+                search_collection(config.SPEC_COLLECTION, expanded_query, k=k_vector),
                 retrieval_source="vector",
                 query_intent=query_intent,
+                exact_terms=exact_terms,
+                expanded_query=expanded_query,
             )
         )
     if search_meetings:
         results.extend(
             _tag_results(
-                search_collection(config.MEETING_COLLECTION, query, k=k_vector),
+                search_collection(config.MEETING_COLLECTION, expanded_query, k=k_vector),
                 retrieval_source="vector",
                 query_intent=query_intent,
+                exact_terms=exact_terms,
+                expanded_query=expanded_query,
             )
         )
 
-    keyword_results = build_default_bm25().search(query, k=k_keyword)
+    keyword_results = build_default_bm25().search(expanded_query, k=k_keyword)
     for result in keyword_results:
         metadata = result.get("metadata") or {}
         collection_name = metadata.get("collection_name") or result.get("collection_name")
@@ -86,9 +114,36 @@ def hybrid_search(
         if collection_name == config.MEETING_COLLECTION and not search_meetings:
             continue
         result["query_intent"] = query_intent
+        result["exact_terms"] = exact_terms
+        result["expanded_query"] = expanded_query
         results.append(result)
 
     return sort_by_source_quality(deduplicate_results(results))
+
+
+def expand_3gpp_query(query: str) -> str:
+    """Append common 3GPP acronym expansions to improve retrieval recall."""
+
+    expanded_parts = [query.strip()]
+    for acronym, expansions in ACRONYM_EXPANSIONS.items():
+        if not _contains_acronym(query, acronym):
+            continue
+        for term in expansions:
+            if term.lower() not in query.lower():
+                expanded_parts.append(term)
+    return " ".join(part for part in expanded_parts if part)
+
+
+def exact_3gpp_terms_for_query(query: str) -> list[str]:
+    """Return exact terms that should boost acronym-specific chunks."""
+
+    terms: list[str] = []
+    for acronym, expansions in ACRONYM_EXPANSIONS.items():
+        if not _contains_acronym(query, acronym):
+            continue
+        terms.append(acronym)
+        terms.extend(expansions)
+    return _dedupe_case_insensitive(terms)
 
 
 def deduplicate_results(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -198,12 +253,16 @@ def _tag_results(
     results: list[dict[str, Any]],
     retrieval_source: str,
     query_intent: dict[str, bool],
+    exact_terms: list[str],
+    expanded_query: str,
 ) -> list[dict[str, Any]]:
     tagged: list[dict[str, Any]] = []
     for result in results:
         copy = dict(result)
         copy["retrieval_source"] = retrieval_source
         copy["query_intent"] = query_intent
+        copy["exact_terms"] = exact_terms
+        copy["expanded_query"] = expanded_query
         tagged.append(copy)
     return tagged
 
@@ -227,6 +286,7 @@ def _source_quality_score(result: dict[str, Any]) -> float:
             score -= 5.0
 
     score += _retrieval_score(result)
+    score += _exact_term_score(result)
     score += _date_score(metadata.get("meeting_date"))
     return score
 
@@ -267,6 +327,61 @@ def _is_discussion_query(query: str) -> bool:
 
 def _query_tokens(query: str) -> set[str]:
     return {token.lower() for token in re.findall(r"[A-Za-z0-9_.-]+", query)}
+
+
+def _contains_acronym(text: str, acronym: str) -> bool:
+    return re.search(
+        rf"(?<![A-Za-z0-9_]){re.escape(acronym)}(?![A-Za-z0-9_])",
+        text,
+        flags=re.IGNORECASE,
+    ) is not None
+
+
+def _exact_term_score(result: dict[str, Any]) -> float:
+    terms = result.get("exact_terms") or []
+    if not terms:
+        result["exact_term_matches"] = []
+        return 0.0
+
+    metadata = result.get("metadata") or {}
+    haystack = " ".join(
+        str(value)
+        for value in (
+            result.get("text"),
+            metadata.get("text"),
+            metadata.get("title"),
+            metadata.get("tdoc_id"),
+            metadata.get("related_spec"),
+        )
+        if value
+    )
+    matches = [term for term in terms if _contains_exact_term(haystack, str(term))]
+    result["exact_term_matches"] = matches
+    return float(len(matches)) * 8.0
+
+
+def _contains_exact_term(text: str, term: str) -> bool:
+    if not text or not term:
+        return False
+    if re.fullmatch(r"[A-Za-z0-9_]+", term):
+        return re.search(
+            rf"(?<![A-Za-z0-9_]){re.escape(term)}(?![A-Za-z0-9_])",
+            text,
+            flags=re.IGNORECASE,
+        ) is not None
+    return term.lower() in text.lower()
+
+
+def _dedupe_case_insensitive(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for value in values:
+        key = value.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(value)
+    return deduped
 
 
 def _text_fingerprint(text: str) -> str:

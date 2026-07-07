@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from rag import llm
+from rag.figure_retriever import format_figure_evidence, search_figures
 from rag.retriever import (
     deduplicate_results,
     format_evidence,
@@ -14,15 +15,20 @@ from rag.retriever import (
 from rag.router import route_query
 
 
-def answer_question(question: str) -> str:
+def answer_question(
+    question: str,
+    include_figures: bool = True,
+    max_figures: int = 3,
+) -> str:
     """Route, retrieve evidence, and answer with explicit evidence references."""
 
     if not question.strip():
         return "Evidence is insufficient to answer because the question is empty."
 
     route = route_query(question)
+    suggested_queries = route.get("suggested_queries") or [question]
     results: list[dict[str, Any]] = []
-    for query in route.get("suggested_queries") or [question]:
+    for query in suggested_queries:
         results.extend(
             hybrid_search(
                 query,
@@ -32,14 +38,20 @@ def answer_question(question: str) -> str:
         )
 
     results = sort_by_source_quality(deduplicate_results(results))
-    if not results:
+    figure_results = (
+        _search_figure_evidence(suggested_queries, max_figures)
+        if include_figures
+        else []
+    )
+    if not results and not figure_results:
         return (
             "Evidence is insufficient to answer this question. "
-            "No matching official specification or meeting evidence was retrieved."
+            "No matching official specification, meeting, or figure evidence was retrieved."
         )
 
-    evidence = format_evidence(results)
-    prompt = _answer_prompt(question, route, evidence)
+    evidence = format_evidence(results) if results else "No text evidence retrieved."
+    figure_evidence = format_figure_evidence(figure_results) if figure_results else ""
+    prompt = _answer_prompt(question, route, evidence, figure_evidence)
     system_prompt = _answer_system_prompt()
     answer = llm.call_local_llm(prompt, system_prompt=system_prompt).strip()
     if not answer:
@@ -68,13 +80,20 @@ Common acronym hints:
 - SEPP = Security Edge Protection Proxy
 - AUSF = Authentication Server Function
 - UDM = Unified Data Management
+- SEAF = Security Anchor Function
 Do not expand acronyms incorrectly.
 If acronym meaning is uncertain from context and evidence, say so instead of guessing.
+Figure evidence can support statements about diagrams and captions, but it does not replace official text unless the evidence says so.
 If the evidence is insufficient, say so plainly.
 """.strip()
 
 
-def _answer_prompt(question: str, route: dict[str, Any], evidence: str) -> str:
+def _answer_prompt(
+    question: str,
+    route: dict[str, Any],
+    evidence: str,
+    figure_evidence: str = "",
+) -> str:
     return f"""
 Question:
 {question}
@@ -88,9 +107,38 @@ reason: {route.get("reason")}
 Evidence:
 {evidence}
 
+Figure evidence:
+{figure_evidence or "No figure evidence retrieved."}
+
 Answer requirements:
 - Include [Evidence X] references for claims.
+- Use [Figure Evidence X] references for claims based on extracted figures.
 - Use separate sections for Official specification facts and Meeting discussions when both source types appear.
 - Keep proposals and unknown-status meeting documents clearly labeled as meeting discussions, not approved standards.
 - State when evidence is insufficient for part of the question.
 """.strip()
+
+
+def _search_figure_evidence(
+    queries: list[str],
+    max_figures: int,
+) -> list[dict[str, Any]]:
+    if max_figures <= 0:
+        return []
+
+    figures: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for query in queries:
+        try:
+            candidates = search_figures(query, k=max_figures)
+        except Exception:
+            continue
+        for figure in candidates:
+            key = str(figure.get("image_path") or figure.get("caption") or figure)
+            if key in seen:
+                continue
+            seen.add(key)
+            figures.append(figure)
+            if len(figures) >= max_figures:
+                return figures
+    return figures

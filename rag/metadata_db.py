@@ -31,6 +31,19 @@ DOCUMENT_COLUMNS = (
     "downloaded_at",
     "indexed_at",
 )
+FIGURE_COLUMNS = (
+    "document_id",
+    "figure_number",
+    "caption",
+    "image_path",
+    "source_file",
+    "page",
+    "clause",
+    "surrounding_text",
+    "doc_type",
+    "status",
+    "created_at",
+)
 
 
 def connect() -> sqlite3.Connection:
@@ -77,6 +90,31 @@ def init_db() -> None:
         )
         connection.execute(
             "CREATE INDEX IF NOT EXISTS idx_documents_doc_type ON documents(doc_type)"
+        )
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS figures (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                document_id INTEGER,
+                figure_number TEXT,
+                caption TEXT,
+                image_path TEXT NOT NULL UNIQUE,
+                source_file TEXT NOT NULL,
+                page TEXT,
+                clause TEXT,
+                surrounding_text TEXT,
+                doc_type TEXT,
+                status TEXT,
+                created_at TEXT,
+                FOREIGN KEY(document_id) REFERENCES documents(id)
+            )
+            """
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_figures_document_id ON figures(document_id)"
+        )
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS idx_figures_source_file ON figures(source_file)"
         )
 
 
@@ -144,6 +182,85 @@ def register_document(path: str | Path, metadata: dict[str, Any]) -> int:
     if row is None:
         raise RuntimeError(f"Failed to register document: {target_path}")
     return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def get_document_id(path: str | Path) -> int | None:
+    """Return the registered document ID for a path, if available."""
+
+    init_db()
+    target_path = str(Path(path).resolve())
+    with connect() as connection:
+        row = connection.execute(
+            "SELECT id FROM documents WHERE file_path = ? LIMIT 1", (target_path,)
+        ).fetchone()
+    if row is None:
+        return None
+    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def register_figure(metadata: dict[str, Any]) -> int:
+    """Insert or update figure metadata and return its ID."""
+
+    init_db()
+    values = {column: metadata.get(column) for column in FIGURE_COLUMNS}
+    values["image_path"] = str(Path(str(values["image_path"])).resolve())
+    values["source_file"] = str(Path(str(values["source_file"])).resolve())
+    values["created_at"] = metadata.get("created_at") or _utc_now()
+
+    assignments = ", ".join(
+        f"{column} = excluded.{column}" for column in FIGURE_COLUMNS if column != "image_path"
+    )
+    placeholders = ", ".join("?" for _ in FIGURE_COLUMNS)
+    columns = ", ".join(FIGURE_COLUMNS)
+    params = tuple(values[column] for column in FIGURE_COLUMNS)
+
+    with connect() as connection:
+        connection.execute(
+            f"""
+            INSERT INTO figures ({columns})
+            VALUES ({placeholders})
+            ON CONFLICT(image_path) DO UPDATE SET {assignments}
+            """,
+            params,
+        )
+        row = connection.execute(
+            "SELECT id FROM figures WHERE image_path = ?", (values["image_path"],)
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError(f"Failed to register figure: {values['image_path']}")
+    return int(row["id"] if isinstance(row, sqlite3.Row) else row[0])
+
+
+def list_figures(limit: int = 100) -> list[dict[str, Any]]:
+    """Return recently registered figure metadata rows."""
+
+    if limit <= 0:
+        raise ValueError("limit must be greater than 0.")
+    init_db()
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT
+                id,
+                document_id,
+                figure_number,
+                caption,
+                image_path,
+                source_file,
+                page,
+                clause,
+                surrounding_text,
+                doc_type,
+                status,
+                created_at
+            FROM figures
+            ORDER BY created_at DESC, id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def list_documents(limit: int = 100) -> list[dict[str, Any]]:

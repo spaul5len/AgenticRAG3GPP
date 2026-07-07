@@ -41,9 +41,6 @@ def ingest_specs(specs_dir: Path | None = None, dry_run: bool = False) -> Ingest
         print(f"Specs directory does not exist: {root}")
         return stats
 
-    if not dry_run:
-        metadata_db.init_db()
-
     for path in iter_spec_files(root):
         stats.scanned += 1
 

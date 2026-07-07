@@ -58,9 +58,6 @@ def ingest_meetings(
         print(f"Meetings directory does not exist: {root}")
         return stats
 
-    if not dry_run:
-        metadata_db.init_db()
-
     for metadata_path in iter_metadata_files(root):
         stats.metadata_files += 1
         meeting_root = metadata_path.parent

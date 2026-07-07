@@ -65,6 +65,7 @@ def test_answer_question_routes_and_searches_suggested_queries(monkeypatch):
     assert "SEPP = Security Edge Protection Proxy" in captured["system_prompt"]
     assert "AUSF = Authentication Server Function" in captured["system_prompt"]
     assert "UDM = Unified Data Management" in captured["system_prompt"]
+    assert "SEAF = Security Anchor Function" in captured["system_prompt"]
     assert "Do not expand acronyms incorrectly" in captured["system_prompt"]
     assert "say so instead of guessing" in captured["system_prompt"]
 

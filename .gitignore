@@ -13,6 +13,7 @@ metadata.sqlite
 
 # Sensitive / large documents
 data/
+data/figures/
 downloads/
 raw_docs/
 

@@ -10,7 +10,7 @@ from rag import config
 
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
-_CHAT_TIMEOUT_SECONDS = 60
+_CHAT_TIMEOUT_SECONDS = 300
 _EMBED_TIMEOUT_SECONDS = 30
 
 

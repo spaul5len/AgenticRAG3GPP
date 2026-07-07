@@ -8,6 +8,7 @@ import streamlit as st
 
 from rag import config
 from rag.drafting_agent import draft_sa3_contribution
+from rag.figure_retriever import search_figures
 from rag.gap_agent import analyze_gap
 from rag.pipeline import answer_question
 from rag.timeline_agent import build_topic_timeline
@@ -45,6 +46,7 @@ def render_sidebar() -> dict[str, Any]:
         st.caption("Advanced options")
         max_chunks = st.slider("Max chunks", min_value=1, max_value=30, value=8)
         show_evidence = st.checkbox("Show evidence", value=True)
+        retrieve_figures = st.checkbox("Retrieve figures", value=True)
         run_verifier = st.checkbox("Run verifier for drafts", value=True)
 
         st.divider()
@@ -59,6 +61,7 @@ def render_sidebar() -> dict[str, Any]:
         "search_meetings": search_meetings,
         "max_chunks": max_chunks,
         "show_evidence": show_evidence,
+        "retrieve_figures": retrieve_figures,
         "run_verifier": run_verifier,
     }
 
@@ -91,8 +94,20 @@ def run_mode(prompt: str, options: dict[str, Any]) -> dict[str, Any]:
     mode = options["mode"]
     try:
         if mode == "Ask":
-            content = answer_question(prompt)
-            return {"role": "assistant", "content": content, "kind": "answer"}
+            retrieve_figures = bool(options.get("retrieve_figures", True))
+            content = _call_answer_question(
+                prompt,
+                retrieve_figures=retrieve_figures,
+            )
+            figures = _safe_search_figures(prompt, k=3) if retrieve_figures else []
+            message = {
+                "role": "assistant",
+                "content": content,
+                "kind": "answer",
+            }
+            if figures:
+                message["package"] = {"figures": figures}
+            return message
         if mode == "Gap Analysis":
             package = analyze_gap(prompt)
             return {
@@ -131,6 +146,19 @@ def run_mode(prompt: str, options: dict[str, Any]) -> dict[str, Any]:
         }
 
     return {"role": "assistant", "content": "Unsupported mode.", "kind": "error"}
+
+
+def _call_answer_question(prompt: str, retrieve_figures: bool) -> str:
+    try:
+        return answer_question(
+            prompt,
+            include_figures=retrieve_figures,
+            max_figures=3,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+        return answer_question(prompt)
 
 
 def _render_message_content(message: dict[str, Any], options: dict[str, Any]) -> None:
@@ -172,14 +200,18 @@ def _render_evidence_panel(message: dict[str, Any]) -> None:
     raw_results = package.get("raw_results") or (package.get("gap_package") or {}).get(
         "raw_results"
     )
+    figures = package.get("figures") or []
     review = package.get("review")
 
-    if not evidence and not raw_results and not review:
+    if not evidence and not raw_results and not figures and not review:
         return
 
     with st.expander("Evidence", expanded=False):
         if review:
             st.warning(str(review))
+        if figures:
+            for index, figure in enumerate(figures, start=1):
+                _render_figure_card(index, figure)
         if raw_results:
             for index, result in enumerate(raw_results, start=1):
                 _render_source_card(index, result)
@@ -204,6 +236,31 @@ def _render_source_card(index: int, result: dict[str, Any]) -> None:
                 "related_spec": metadata.get("related_spec"),
                 "file_path": metadata.get("file_path") or result.get("source"),
                 "page": metadata.get("page") or result.get("page"),
+            }
+        )
+
+
+def _render_figure_card(index: int, figure: dict[str, Any]) -> None:
+    caption = figure.get("caption") or "Extracted figure"
+    image_path = str(figure.get("image_path") or "")
+    with st.container(border=True):
+        st.markdown(f"**Figure Evidence {index}: {caption}**")
+        if image_path:
+            try:
+                st.image(image_path, caption=caption, use_container_width=True)
+            except TypeError:
+                st.image(image_path, caption=caption)
+            except Exception as exc:
+                st.warning(f"Could not display image: {_safe_error_message(exc)}")
+        st.json(
+            {
+                "figure_number": figure.get("figure_number"),
+                "source_file": figure.get("source_file"),
+                "page_or_order": figure.get("page")
+                or (figure.get("metadata") or {}).get("approximate_order"),
+                "clause": figure.get("clause"),
+                "doc_type": figure.get("doc_type"),
+                "status": figure.get("status"),
             }
         )
 
@@ -233,6 +290,13 @@ def _safe_error_message(exc: Exception) -> str:
         else:
             parts.append(token)
     return " ".join(parts)
+
+
+def _safe_search_figures(prompt: str, k: int) -> list[dict[str, Any]]:
+    try:
+        return search_figures(prompt, k=k)
+    except Exception:
+        return []
 
 
 if __name__ == "__main__":

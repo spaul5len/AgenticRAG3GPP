@@ -168,6 +168,104 @@ def test_hybrid_search_uses_selected_collections_and_filters_keyword(monkeypatch
     assert all(item["metadata"]["doc_type"] == "official_spec" for item in results)
 
 
+def test_expand_3gpp_query_adds_acronym_specific_terms():
+    expanded = retriever.expand_3gpp_query(
+        "What does TS 33.501 say about AUSF and UDM in 5G authentication?"
+    )
+
+    assert "Nausf_UEAuthentication" in expanded
+    assert "Authentication Server Function" in expanded
+    assert "SEAF" in expanded
+    assert "authentication vector" in expanded
+    assert "Unified Data Management" in expanded
+    assert "Nudm_UEAuthentication" in expanded
+    assert "authentication subscription data" in expanded
+
+
+def test_expand_3gpp_query_adds_sba_terms():
+    expanded = retriever.expand_3gpp_query("How does SBA authorization work?")
+
+    assert "Service-Based Architecture" in expanded
+    assert "NF Service Consumer" in expanded
+    assert "NF Service Producer" in expanded
+    assert "NRF" in expanded
+    assert "access token" in expanded
+
+
+def test_hybrid_search_uses_expanded_query_for_vector_and_keyword(monkeypatch):
+    vector_queries = []
+    keyword_queries = []
+
+    def fake_search_collection(collection_name, query, k, where=None):
+        vector_queries.append(query)
+        return []
+
+    class FakeBM25:
+        def search(self, query, k):
+            keyword_queries.append(query)
+            return []
+
+    monkeypatch.setattr(retriever, "search_collection", fake_search_collection)
+    monkeypatch.setattr(retriever, "build_default_bm25", lambda: FakeBM25())
+
+    retriever.hybrid_search(
+        "AUSF and UDM authentication",
+        search_specs=True,
+        search_meetings=False,
+    )
+
+    assert len(vector_queries) == 1
+    assert "Nausf_UEAuthentication" in vector_queries[0]
+    assert "Nudm_UEAuthentication" in vector_queries[0]
+    assert keyword_queries == vector_queries
+
+
+def test_acronym_exact_match_reranks_above_generic_chunk(monkeypatch):
+    def fake_search_collection(collection_name, query, k, where=None):
+        return [
+            result(
+                "Generic authentication procedure text without target functions.",
+                {
+                    "doc_type": "official_spec",
+                    "status": "official",
+                    "collection_name": collection_name,
+                    "file_path": "/generic.txt",
+                    "page": 1,
+                },
+                distance=0.05,
+            ),
+            result(
+                "The AUSF obtains data from UDM via Nudm_UEAuthentication and derives KSEAF with SEAF.",
+                {
+                    "doc_type": "official_spec",
+                    "status": "official",
+                    "collection_name": collection_name,
+                    "file_path": "/specific.txt",
+                    "page": 2,
+                },
+                distance=0.9,
+            ),
+        ]
+
+    class FakeBM25:
+        def search(self, query, k):
+            return []
+
+    monkeypatch.setattr(retriever, "search_collection", fake_search_collection)
+    monkeypatch.setattr(retriever, "build_default_bm25", lambda: FakeBM25())
+
+    results = retriever.hybrid_search(
+        "What does TS 33.501 say about AUSF and UDM in 5G authentication?",
+        search_specs=True,
+        search_meetings=False,
+    )
+
+    assert results[0]["metadata"]["file_path"] == "/specific.txt"
+    assert {"AUSF", "UDM", "SEAF", "Nudm_UEAuthentication", "KSEAF"}.issubset(
+        set(results[0]["exact_term_matches"])
+    )
+
+
 def test_format_evidence_includes_required_source_fields():
     evidence = retriever.format_evidence(
         [
