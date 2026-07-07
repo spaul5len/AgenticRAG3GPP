@@ -2,7 +2,7 @@
 
 Local 3GPP SA3 Agentic RAG is a local-first research assistant for 3GPP SA3 and telecom-security research. It is designed to ingest official 3GPP specifications and SA3 meeting/TDoc material, preserve source metadata, retrieve evidence, analyze specification gaps, draft SA3-style contribution text, and verify whether generated claims are supported by source documents.
 
-The runtime RAG system uses local models through Ollama and does **not** require the OpenAI API.
+The runtime RAG system uses local models through Ollama and does **not** require any external API.
 
 ---
 
