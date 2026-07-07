@@ -51,6 +51,32 @@ def test_call_local_llm_uses_local_ollama_chat_api(monkeypatch):
     ]
 
 
+def test_call_local_llm_falls_back_to_generate_api_on_chat_404(monkeypatch):
+    chat_response = Mock()
+    chat_response.status_code = 404
+    chat_error = requests.exceptions.HTTPError("404 Client Error", response=chat_response)
+    chat_response.raise_for_status.side_effect = chat_error
+
+    generate_response = Mock()
+    generate_response.raise_for_status.return_value = None
+    generate_response.json.return_value = {"response": "fallback answer"}
+
+    post = Mock(side_effect=[chat_response, generate_response])
+    monkeypatch.setattr(llm.requests, "post", post)
+
+    result = llm.call_local_llm("question", system_prompt="system", model="local-chat")
+
+    assert result == "fallback answer"
+    assert post.call_count == 2
+    assert post.call_args_list[0].args[0] == "http://localhost:11434/api/chat"
+    assert post.call_args_list[1].args[0] == "http://localhost:11434/api/generate"
+    assert post.call_args_list[1].kwargs["json"] == {
+        "model": "local-chat",
+        "prompt": "System:\nsystem\n\nUser:\nquestion",
+        "stream": False,
+    }
+
+
 def test_embed_text_uses_local_ollama_embedding_api(monkeypatch):
     response = Mock()
     response.raise_for_status.return_value = None

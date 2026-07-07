@@ -12,7 +12,7 @@ CHROMA_DIR = BASE_DIR / "chroma_db"
 SQLITE_PATH = BASE_DIR / "metadata.sqlite"
 
 OLLAMA_URL = "http://localhost:11434"
-CHAT_MODEL = "llama3.1"
+CHAT_MODEL = "llama3.1:8b"
 EMBED_MODEL = "nomic-embed-text"
 
 SPEC_COLLECTION = "official_specs"

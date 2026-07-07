@@ -51,17 +51,53 @@ def _post_ollama(path: str, payload: dict, timeout: int) -> dict:
         raise RuntimeError("Local Ollama returned a non-JSON response.") from exc
 
 
-def call_local_llm(prompt: str) -> str:
+def _is_ollama_404(error: RuntimeError) -> bool:
+    cause = error.__cause__
+    response = getattr(cause, "response", None)
+    return isinstance(cause, requests.exceptions.HTTPError) and response is not None and response.status_code == 404
+
+
+def _format_generate_prompt(prompt: str, system_prompt: str | None) -> str:
+    if not system_prompt:
+        return prompt
+    return f"System:\n{system_prompt}\n\nUser:\n{prompt}"
+
+
+def call_local_llm(prompt: str, system_prompt: str | None = None, model: str | None = None) -> str:
+    """Call local Ollama and return assistant text.
+
+    Uses /api/chat first. If the local Ollama server returns 404 for that endpoint,
+    falls back to /api/generate for compatibility with older/local deployments.
+    """
+
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": prompt})
+
     payload = {
-        "model": "llama3.1:8b",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ],
+        "model": model or config.CHAT_MODEL,
+        "messages": messages,
         "stream": False,
     }
 
-    data = _post_ollama("/api/chat", payload, timeout=_CHAT_TIMEOUT_SECONDS)
-    return data["message"]["content"]
+    try:
+        data = _post_ollama("/api/chat", payload, timeout=_CHAT_TIMEOUT_SECONDS)
+        content = data.get("message", {}).get("content")
+    except RuntimeError as exc:
+        if not _is_ollama_404(exc):
+            raise
+        generate_payload = {
+            "model": model or config.CHAT_MODEL,
+            "prompt": _format_generate_prompt(prompt, system_prompt),
+            "stream": False,
+        }
+        data = _post_ollama("/api/generate", generate_payload, timeout=_CHAT_TIMEOUT_SECONDS)
+        content = data.get("response")
+
+    if not isinstance(content, str):
+        raise RuntimeError("Local Ollama response did not include assistant text.")
+    return content
 
 
 def embed_text(text: str, model: str | None = None) -> list[float]:
