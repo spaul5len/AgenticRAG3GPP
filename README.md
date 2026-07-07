@@ -6,7 +6,7 @@ The runtime RAG system uses local models through Ollama and does **not** require
 
 **Usage** : Understand the specs with questions, Retrive evidence of claims, Brainstroming.
 
-**Future Works** : Collaborative Disclosure drafting with other team membbers, Quizes from Specs.
+**Future Works** : Collaborative Disclosure drafting with other team membbers, Direct Claim Mappings and Quizes from Specs.
 
 
 ---
