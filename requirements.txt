@@ -1,0 +1,15 @@
+requests
+chromadb
+pypdf
+pymupdf
+python-docx
+python-pptx
+pandas
+rank-bm25
+fastapi
+uvicorn
+streamlit
+pydantic
+beautifulsoup4
+apscheduler
+pytest

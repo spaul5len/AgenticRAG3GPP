@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+
+# Local databases and indexes
+chroma_db/
+metadata.sqlite
+*.sqlite
+*.db
+
+# Sensitive / large documents
+data/
+downloads/
+raw_docs/
+
+# OS/editor
+.DS_Store
+.vscode/
+.idea/
